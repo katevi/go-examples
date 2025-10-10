@@ -19,7 +19,7 @@ func main() {
 		panic(err)
 	}
 
-	err = c.SubscribeTopics([]string{"myTopic", "^aRegex.*[Tt]opic"}, nil)
+	err = c.SubscribeTopics([]string{"myTopic2", "^aRegex.*[Tt]opic"}, nil)
 
 	if err != nil {
 		panic(err)
