@@ -2,146 +2,90 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
-	"time"
 
 	"github.com/go-redis/redis/v8"
+	"kate.redis.example/queue"
 )
 
-var ctx = context.Background()
-var rdb *redis.Client
-
-type Message struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
-
-func initRedis() {
-	// Connect to Redis running in Docker on localhost:6379
-	rdb = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379", // Docker exposes Redis on host's localhost
-		Password: "",               // no password set
-		DB:       0,                // use default DB
+func main() {
+	// Initialize Redis client
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "localhost:6379",
+		Password: "", // no password set
+		DB:       0,  // use default DB
 	})
 
-	// Test connection with retry logic
-	var err error
+	// Test connection
+	ctx := context.Background()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		log.Fatal("Redis connection failed:", err)
+	}
+
+	// Create priority queue
+	pq := queue.NewStreamPriorityQueue(rdb, "my_priority_stream", "worker_group")
+
+	// Enqueue some items with different priorities
+	fmt.Println("Enqueueing items...")
+	items := []struct {
+		item     string
+		priority int
+	}{
+		{"critical_task", 1},
+		{"important_task", 2},
+		{"normal_task", 3},
+		{"low_priority_task", 4},
+	}
+
+	for _, item := range items {
+		err := pq.Enqueue(item.item, item.priority)
+		if err != nil {
+			log.Printf("Failed to enqueue %s: %v", item.item, err)
+		} else {
+			fmt.Printf("Enqueued: %s (priority %d)\n", item.item, item.priority)
+		}
+	}
+
+	// Get queue info
+	total, pending, err := pq.GetQueueInfo()
+	if err != nil {
+		log.Printf("Failed to get queue info: %v", err)
+	} else {
+		fmt.Printf("Queue info - Total: %d, Pending: %d\n", total, pending)
+	}
+
+	// Peek at the next message
+	item, priority, err := pq.Peek()
+	if err == nil {
+		fmt.Printf("Next message: %s (priority %d)\n", item, priority)
+	}
+
+	// Dequeue and process messages
+	fmt.Println("\nDequeueing messages...")
 	for i := 0; i < 5; i++ {
-		_, err = rdb.Ping(ctx).Result()
-		if err == nil {
+		item, priority, err := pq.Dequeue()
+		if err != nil {
+			if err == redis.Nil {
+				fmt.Println("No more messages in queue")
+				break
+			}
+			log.Printf("Dequeue error: %v", err)
 			break
 		}
-		log.Printf("Failed to connect to Redis (attempt %d/5): %v", i+1, err)
-		time.Sleep(2 * time.Second)
+		fmt.Printf("Dequeued: %s (priority %d)\n", item, priority)
 	}
 
+	// Demonstrate advanced dequeue with claiming
+	fmt.Println("\nTrying advanced dequeue...")
+	item, priority, err = pq.DequeueWithPriority()
 	if err != nil {
-		log.Fatalf("Could not connect to Redis after 5 attempts: %v", err)
-	}
-
-	log.Println("Connected to Redis successfully!")
-}
-
-func setHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var msg Message
-	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	err := rdb.Set(ctx, msg.Key, msg.Value, 10*time.Minute).Err()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Redis error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
-		"key":    msg.Key,
-	})
-}
-
-func getHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "Key parameter is required", http.StatusBadRequest)
-		return
-	}
-
-	val, err := rdb.Get(ctx, key).Result()
-	if err == redis.Nil {
-		http.Error(w, "Key not found", http.StatusNotFound)
-		return
-	} else if err != nil {
-		http.Error(w, fmt.Sprintf("Redis error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(Message{
-		Key:   key,
-		Value: val,
-	})
-}
-
-func getAllHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	keys, err := rdb.Keys(ctx, "*").Result()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Redis error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	result := make(map[string]string)
-	for _, key := range keys {
-		val, err := rdb.Get(ctx, key).Result()
-		if err == nil {
-			result[key] = val
+		if err == redis.Nil {
+			fmt.Println("No messages available")
+		} else {
+			log.Printf("Advanced dequeue error: %v", err)
 		}
+	} else {
+		fmt.Printf("Advanced dequeue got: %s (priority %d)\n", item, priority)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
-}
-
-func infoHandler(w http.ResponseWriter, r *http.Request) {
-	info, err := rdb.Info(ctx).Result()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Redis error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintf(w, "Redis Info:\n%s", info)
-}
-
-func main() {
-	initRedis()
-
-	http.HandleFunc("/set", setHandler)
-	http.HandleFunc("/get", getHandler)
-	http.HandleFunc("/keys", getAllHandler)
-	http.HandleFunc("/info", infoHandler)
-
-	log.Println("Go application starting on :8080")
-	log.Println("Redis server should be running in Docker on localhost:6379")
-	log.Fatal(http.ListenAndServe(":8080", nil))
 }
