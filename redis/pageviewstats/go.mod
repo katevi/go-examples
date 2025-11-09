@@ -1,8 +1,11 @@
-module kate.redis.example
+module kate.redis.pageviewstats
 
 go 1.24.1
 
-require github.com/go-redis/redis/v8 v8.11.5
+require (
+	github.com/go-redis/redis/v8 v8.11.5
+	github.com/google/uuid v1.6.0
+)
 
 require (
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect

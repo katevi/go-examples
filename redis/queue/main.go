@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/go-redis/redis/v8"
-	"kate.redis.example/queue"
+	"kate.redis.queue/queue"
 )
 
 func main() {
